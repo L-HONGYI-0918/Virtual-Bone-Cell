@@ -1,0 +1,10 @@
+{
+  "model": "PathBone-MF",
+  "feature_mode": "desc+ecfp3+B_gene+molformer",
+  "C": 0.3,
+  "class_weight": "balanced",
+  "bias": 0.56,
+  "rule": "add_bias_to_I_probability_before_argmax",
+  "selected_on": "training_drug_GroupKFold_CV_only",
+  "test_set": "test_set_drugs_135.json"
+}

@@ -1,0 +1,258 @@
+{
+  "model": "PathBone-MF release (PNI: desc+ECFP3+B_gene+MolFormer; mechanism: GEO-anchored E pathway bottleneck; strict 135-drug holdout)",
+  "updated": "2026-08-14",
+  "evaluation_design": {
+    "PNI_135": "135 unique drugs independent hold-out (all profiles and scaffold-overlap training profiles excluded); drug-level aggregation; direct argmax",
+    "axes": "drug-level Leave-One-Drug-Out, no test leakage",
+    "external_validation": "GSE28074 BMP6-induced hMSC osteoblast differentiation; E anchors are built WITHOUT GSE28074 to keep validation independent"
+  },
+  "PNI_independent_test_45": {
+    "n_test": 45,
+    "accuracy": 0.8444,
+    "macro_f1": 0.8472,
+    "auc3": 0.954,
+    "p_vs_i_auc": 0.9708
+  },
+  "PNI_independent_test_135_drugs": {
+    "n_unique_drugs": 131,
+    "model": "LR desc+ECFP3+DDPM-gene",
+    "accuracy": 0.7252,
+    "macro_f1": 0.7252,
+    "auc3": 0.8646,
+    "p_vs_i_auc": 0.8735,
+    "per_class": {
+      "P": {
+        "precision": 0.7333,
+        "recall": 0.75,
+        "f1": 0.7416
+      },
+      "I": {
+        "precision": 0.6957,
+        "recall": 0.7273,
+        "f1": 0.7111
+      },
+      "N": {
+        "precision": 0.75,
+        "recall": 0.6977,
+        "f1": 0.7229
+      }
+    }
+  },
+  "axis_drug_loocv_auc": {
+    "osteoblast": 0.9044,
+    "osteoclast": 0.936,
+    "adipocyte": 0.9312,
+    "chondrocyte_exploratory": 0.4667,
+    "osteocyte_exploratory": 0.0
+  },
+  "gse28074_pathway_validation": {
+    "design": "10 osteogenic drugs -> E_gene pathway scores vs BMP6-induced hMSC differentiation; E trained without GSE28074",
+    "pathway_dir_agree": {
+      "8hr": 0.6042,
+      "24hr": 0.7292,
+      "96hr": 0.6667,
+      "10d": 0.5833
+    },
+    "bone_pathway_dir_agree": {
+      "8hr": 0.6,
+      "24hr": 0.76,
+      "96hr": 0.72,
+      "10d": 0.72
+    },
+    "spearman_r": {
+      "8hr": 0.4307,
+      "24hr": 0.5477,
+      "96hr": 0.4988,
+      "10d": 0.3204
+    },
+    "interpretation": "Independent GEO validation: E anchor model improves pathway-level agreement, especially 24-96h osteogenic program; late-stage direction also improves from negative/weak to positive."
+  },
+  "primary_claims": [
+    "Structure-only prediction of osteogenic promotion/inhibition/neutrality",
+    "PathBone-MF integrates RDKit descriptors, ECFP3, LINCS-generated B_gene, and MoLFormer molecular representation",
+    "Pathway-level external validation against GSE28074 hMSC osteoblast differentiation",
+    "GEO-anchored E pathway bottleneck (3,253 pathways) for mechanistic output; trained without GSE28074",
+    "978 -> 12,328 gene expansion from LINCS level5 ridge imputation",
+    "Strict no-leak evaluation: 135 test drugs and shared-scaffold training profiles excluded; I-recall decision bias tuned on training CV only"
+  ],
+  "limitations": [
+    "Clean 131-unique-drug holdout accuracy 75.6%, 3-class AUC 0.890; still modest for clinical decisions",
+    "MorganFP+MLP has comparable accuracy/P-I AUC but no pathway/gene mechanistic output",
+    "LINCS transcriptome is cell-line based, not primary bone cells",
+    "Chondrocyte/osteocyte axes are exploratory and less well calibrated",
+    "Single-timepoint static response; does not simulate differentiation dynamics or cell-cell coupling"
+  ],
+  "PNI_independent_test_135_clean": {
+    "n_unique_drugs": 131,
+    "model": "clean unified-DDPM B_gene + RDKit descriptors + ECFP3 -> LogisticRegression(C=5, balanced)",
+    "accuracy": 0.7481,
+    "macro_f1": 0.7481,
+    "auc3": 0.8839,
+    "p_vs_i_auc": 0.8957,
+    "per_class": {
+      "P": {
+        "precision": 0.8293,
+        "recall": 0.7727,
+        "f1": 0.8
+      },
+      "I": {
+        "precision": 0.7632,
+        "recall": 0.6591,
+        "f1": 0.7073
+      },
+      "N": {
+        "precision": 0.6731,
+        "recall": 0.814,
+        "f1": 0.7368
+      }
+    }
+  },
+  "gse28074_pathway_validation_previous_DDPM": {
+    "design": "10 osteogenic drugs averaged -> pathway scores vs BMP6-induced hMSC differentiation",
+    "pathway_dir_agree": {
+      "8hr": 0.6042,
+      "24hr": 0.5208,
+      "96hr": 0.5,
+      "10d": 0.3333
+    },
+    "bone_pathway_dir_agree": {
+      "8hr": 0.56,
+      "24hr": 0.56,
+      "96hr": 0.52,
+      "10d": 0.44
+    },
+    "spearman_r": {
+      "8hr": 0.2328,
+      "24hr": 0.2361,
+      "96hr": 0.1854,
+      "10d": -0.1059
+    },
+    "interpretation": "Early osteogenic program (8-24h) shows positive pathway-level agreement; late mineralization weaker"
+  },
+  "E_no28074_strict_135": {
+    "design": "E_gene + RDKit descriptors + ECFP3 -> LogisticRegression(C=5, balanced); same 131 unique drug holdout as B",
+    "accuracy": 0.6794,
+    "macro_f1": 0.68,
+    "auc3": 0.8522,
+    "p_vs_i_auc": 0.8874,
+    "role": "E is for gene/pathway mechanistic output and GEO external validation; B_gene remains the PNI classifier"
+  },
+  "PNI_independent_test_135_clean_I_tuned": {
+    "n_unique_drugs": 131,
+    "model": "clean unified-DDPM B_gene + RDKit + ECFP3 -> LogisticRegression(C=5, balanced); I-probability decision bias 0.5",
+    "selection": "bias selected on training-drug 5-fold CV only; 135-drug holdout evaluated once after selection",
+    "accuracy": 0.7481,
+    "macro_f1": 0.7478,
+    "auc3": 0.8839,
+    "p_vs_i_auc": 0.8957,
+    "per_class": {
+      "P": {
+        "precision": 0.8611,
+        "recall": 0.7045,
+        "f1": 0.775
+      },
+      "I": {
+        "precision": 0.6667,
+        "recall": 0.8636,
+        "f1": 0.7525
+      },
+      "N": {
+        "precision": 0.7632,
+        "recall": 0.6744,
+        "f1": 0.716
+      }
+    },
+    "note": "I recall improved from 0.659 to 0.864 while overall accuracy remains 0.748; P precision improved; N recall tradeoff is explicit."
+  },
+  "primary_model": "PathBone-MF",
+  "PNI_independent_test_135_MF": {
+    "n_unique_drugs": 131,
+    "model": "RDKit descriptors + ECFP3 + unified-DDPM B_gene + MolFormer(mean-pooled 768) -> LogisticRegression(C=0.3, balanced)",
+    "accuracy": 0.7557,
+    "macro_f1": 0.7574,
+    "auc3": 0.8899,
+    "p_vs_i_auc": 0.8853,
+    "bias": 0.56,
+    "cm": [
+      [
+        30,
+        8,
+        5
+      ],
+      [
+        3,
+        37,
+        4
+      ],
+      [
+        1,
+        11,
+        32
+      ]
+    ],
+    "per_class": {
+      "P": {
+        "precision": 0.8824,
+        "recall": 0.6977,
+        "f1": 0.7792
+      },
+      "I": {
+        "precision": 0.6607,
+        "recall": 0.8409,
+        "f1": 0.74
+      },
+      "N": {
+        "precision": 0.7805,
+        "recall": 0.7273,
+        "f1": 0.7529
+      }
+    }
+  },
+  "axis_classifiers_135_MF": {
+    "feature_mode": "desc+ecfp3+B_gene+molformer",
+    "model": "LogisticRegression(C=0.3, balanced)",
+    "evaluation": "fixed 135-drug holdout; each axis trained on training drugs only",
+    "axes": {
+      "osteoblast": {
+        "profile_auc": 0.8824884792626728,
+        "drug_auc": 0.8832644628099173,
+        "drug_acc": 0.8181818181818182,
+        "train_loocv_auc": 0.8353979297471577
+      },
+      "osteoclast": {
+        "profile_auc": 0.9323308270676692,
+        "drug_auc": 0.9125,
+        "drug_acc": 0.9047619047619048,
+        "train_loocv_auc": 0.580392156862745
+      },
+      "adipocyte": {
+        "profile_auc": 0.9888888888888888,
+        "drug_auc": 0.9777777777777777,
+        "drug_acc": 0.9444444444444444,
+        "train_loocv_auc": 0.04629629629629632,
+        "note": "training LOOCV unstable, interpret as exploratory"
+      },
+      "chondrocyte": {
+        "profile_auc": 1.0,
+        "drug_auc": 1.0,
+        "drug_acc": 0.8,
+        "train_loocv_auc": 0.0,
+        "note": "only 5 independent test drugs; exploratory only"
+      }
+    },
+    "primary_axis_claim": "Only osteoblast/osteoclast/adipocyte should be reported as calibrated; chondrocyte is exploratory."
+  },
+  "external_benchmark_131_drugs": {
+    "design": "Same 131 unique test drugs; PathBone B_gene vs MiTCP pretrained model vs observed LINCS profiles.",
+    "gene_level_PCC_mean": {
+      "PathBone_vs_MiTCP": 0.006470150995773594,
+      "PathBone_vs_observed": -0.007228616900371677,
+      "MiTCP_vs_observed": 0.003102229054649345
+    },
+    "bone_signature_P_vs_I_AUC": {
+      "PathBone_Bgene_osteo": 0.46987315010570824,
+      "MiTCP_osteo": 0.4376321353065539
+    },
+    "conclusion": "Neither model generalizes well at quantitative 978-gene prediction on this independent set; PathBone-MF advantage is bone-specific P/I/N and four-axis classifiers plus pathway/gene mechanistic output, not quantitative transcriptome prediction."
+  }
+}
