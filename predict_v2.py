@@ -11,10 +11,10 @@ Outputs:
 import sys, json, csv, argparse, time, math
 sys.stdout.reconfigure(encoding='utf-8')
 from pathlib import Path
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent
 PKG = Path(__file__).resolve().parent
 sys.path.insert(0, str(PKG))
-OUT = ROOT / '\u6a21\u578b'   # 发表/模型
+OUT = ROOT / 'models'
 import numpy as np
 import torch
 import joblib
@@ -28,7 +28,7 @@ from src import diffusion_vc
 from src.train_abcde_A import PathBoneBottleneck
 
 DEV = 'cuda' if torch.cuda.is_available() else 'cpu'
-# 四谱系方向（成骨/破骨/成脂/软骨）+ 净骨方向（成骨−破骨）
+# Four lineage axes (osteoblast/osteoclast/adipocyte/chondrocyte) + net bone direction (osteoblast - osteoclast)
 AXIS_KEYS = ['osteoblast', 'osteoclast', 'adipocyte', 'chondrocyte']
 AXIS_CN = {'osteoblast': 'Osteoblast', 'osteoclast': 'Osteoclast', 'adipocyte': 'Adipocyte', 'chondrocyte': 'Chondrocyte'}
 
@@ -141,6 +141,11 @@ class PathBoneV2:
         if smiles in self._mf_cache:
             return self._mf_cache[smiles]
         if self._mf_model is None:
+            if not self.mf_dir.exists():
+                raise FileNotFoundError(
+                    'MoLFormer weights not found at ' + str(self.mf_dir) + '. '
+                    'Download them first, e.g. `huggingface-cli download ibm/MoLFormer-XL-both-10pct '
+                    '--local-dir models/MoLFormer-XL-both-10pct` (see README).')
             from transformers import AutoTokenizer, AutoModel
             self._mf_tokenizer = AutoTokenizer.from_pretrained(str(self.mf_dir), trust_remote_code=True)
             self._mf_model = AutoModel.from_pretrained(str(self.mf_dir), trust_remote_code=True)
@@ -182,9 +187,9 @@ class PathBoneV2:
         prob = self.pni_clf.predict_proba(X)[0]
         adj_prob = prob + np.array([0.0, self.pni_bias, 0.0], dtype=np.float32)
         cls = int(adj_prob.argmax())
-        cls_cn = {0:'Pro-osteogenic',1:'Anti-osteogenic',2:'Neutral'}[cls]
-        # 四谱系轴对所有类别输出（成骨/破骨为校准轴；成脂/软骨为探索轴）
-        # 净骨方向 = 成骨 − 破骨（区分"促骨形成 vs 促骨吸收"，即"抑制哪个"）
+        cls_label = {0:'Promotes bone formation',1:'Inhibits bone formation',2:'Unrelated to bone formation'}[cls]
+        # Four lineage axes are always reported; osteoblast/osteoclast are the calibrated axes, adipocyte/chondrocyte exploratory
+        # Net bone direction = osteoblast - osteoclast (which side of the formation/resorption balance a drug tilts)
         net_direction = None
         if 'Osteoblast' in axes and 'Osteoclast' in axes:
             net_direction = float(axes['Osteoblast'] - axes['Osteoclast'])
@@ -192,7 +197,7 @@ class PathBoneV2:
         gene12328 = (agene @ self.expand_W + self.expand_intercept).astype(np.float32)
         top_idx = np.argsort(-np.abs(gene12328))
         top_path = np.argsort(-np.abs(path))
-        result = {'drug':shown,'smiles':smi,'class':cls,'class_cn':cls_cn,
+        result = {'drug':shown,'smiles':smi,'class':cls,'class_label':cls_label,
                   'P_prob':float(prob[0]),'I_prob':float(prob[1]),'N_prob':float(prob[2]),'I_decision_bias':self.pni_bias,
                   'Osteo_score':float(prob[0]-prob[1]),
                   'net_direction':net_direction,
@@ -234,7 +239,7 @@ class PathBoneV2:
             'gene_stats_n_samples': n
         }
     def to_summary(self, r, top_n=20):
-        row={'drug':r['drug'],'smiles':r['smiles'],'class':r['class'],'class_cn':r['class_cn'],
+        row={'drug':r['drug'],'smiles':r['smiles'],'class':r['class'],'class_label':r['class_label'],
              'P_prob':round(r['P_prob'],4),'I_prob':round(r['I_prob'],4),'N_prob':round(r['N_prob'],4),'I_decision_bias':r.get('I_decision_bias',0.0),
              'Osteo_score':round(r['Osteo_score'],4)}
         if r.get('net_direction') is not None:
@@ -292,7 +297,7 @@ def main():
         print('SUMMARY',summary); print('GENES',gene); print('PATHWAYS',path); print('GENE_STATS',stat_path)
     if args.drug or args.smiles:
         r=pred.predict(args.drug or args.smiles, n_samples=args.n_samples, compute_stats=not args.no_stats)
-        print('class',r['class_cn'],'P/I/N',[round(r['P_prob'],3),round(r['I_prob'],3),round(r['N_prob'],3)])
+        print('class',r['class_label'],'P/I/N',[round(r['P_prob'],3),round(r['I_prob'],3),round(r['N_prob'],3)])
         print('axes',r['axes'])
         ups=[r['gene_names12328'][i] for i in r['top_idx'] if r['genes12328'][i]>0][:10]
         dns=[r['gene_names12328'][i] for i in r['top_idx'] if r['genes12328'][i]<0][:10]
@@ -308,7 +313,7 @@ def main():
             try:
                 r=pred.predict(x, n_samples=args.n_samples, compute_stats=not args.no_stats); out.append(pred.to_summary(r))
             except Exception as e:
-                out.append({'drug':x,'smiles':'','class':'ERROR','class_cn':str(e)})
+                out.append({'drug':x,'smiles':'','class':'ERROR','class_label':str(e)})
         outdir=ROOT/'outputs'/'predictions_v2'; outdir.mkdir(parents=True,exist_ok=True)
         path=outdir/f'pathbone_v2_batch_{time.strftime("%Y%m%d_%H%M%S")}.csv'
         with open(path,'w',newline='',encoding='utf-8-sig') as f:

@@ -1,5 +1,5 @@
-# PathBone 1.0 —— 推理运行依赖（最小集）
-# 安装: pip install -r requirements.txt
+# PathBone-MF 1.0 - minimal inference dependencies
+# install: pip install -r requirements.txt
 torch>=2.0
 numpy>=1.24
 scipy>=1.10

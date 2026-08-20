@@ -26,4 +26,4 @@ data/geo/
 *.npy.tmp
 
 # MoLFormer pretrained model (NOT bundled in the repo; download from HuggingFace)
-模型/MoLFormer-XL-both-10pct/
+models/MoLFormer-XL-both-10pct/

@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-PathBone v20 潜空间扩散模块
-============================
-1. prepare_lincs_memmap : GCTX -> landmark978 memmap + meta（一次性预处理，之后训练秒读）
-2. GNNEncoder           : 分子图编码器（29维原子特征, 3层GAT, 输出256d）
-3. VAE                  : 978 基因 -> 64 维潜空间压缩
-4. CondDDPM             : 64 维潜空间上的条件扩散 p(z | 分子嵌入, dose, time)
-5. sample_drug          : SMILES -> 978 基因 logFC（多次采样平均）
-6. validate_gse28074    : 探底判据（GSE28074 骨基因方向一致率）
+PathBone-MF latent-space diffusion module
+==========================================
+1. prepare_lincs_memmap : GCTX -> landmark-978 memmap + meta (one-time preprocessing)
+2. GNNEncoder           : molecular graph encoder (29-dim atom features, 3 GAT layers, 256-d output)
+3. VAE                  : 978 genes -> 64-dim latent compression
+4. CondDDPM             : conditional diffusion on 64-dim latent p(z | molecule embedding, dose, time)
+5. sample_drug          : SMILES -> 978-gene logFC (average over repeated sampling)
+6. validate_gse28074    : bone-gene direction agreement against GSE28074
 """
 import sys, io, csv, json, math, time
 try:
@@ -33,7 +33,7 @@ OUT.mkdir(parents=True, exist_ok=True)
 ATOM_TYPES = ["C","N","O","S","F","Cl","P","Br","I","B","Si","Se","other"]
 
 # ============================================================
-# 分子图构建（与 v19 相同特征）
+# Molecular graph construction
 # ============================================================
 def atom_feat(a):
     sym = a.GetSymbol()
@@ -61,7 +61,7 @@ def mol_to_graph(smiles):
     return Data(x=x, edge_index=torch.tensor(ei, dtype=torch.long).t().contiguous())
 
 # ============================================================
-# 分子图编码器
+# Molecular graph encoder
 # ============================================================
 class GNNEncoder(nn.Module):
     def __init__(self, out_dim=256, dropout=0.1):
@@ -80,7 +80,7 @@ class GNNEncoder(nn.Module):
         return self.proj(g)
 
 # ============================================================
-# VAE：978 -> 64 潜空间
+# VAE: 978 -> 64 latent space
 # ============================================================
 class VAE(nn.Module):
     def __init__(self, n_lm=978, latent=64):
@@ -111,7 +111,7 @@ class VAE(nn.Module):
         return mse + beta * kl, mse.item(), kl.item()
 
 # ============================================================
-# 条件潜扩散（DDPM，DDIM 采样）
+# Conditional latent diffusion (DDPM with DDIM sampling)
 # ============================================================
 def cosine_betas(T, s=0.008):
     steps = torch.arange(T + 1, dtype=torch.float32) / T
@@ -121,7 +121,7 @@ def cosine_betas(T, s=0.008):
     return torch.clip(betas, 0.0001, 0.02)
 
 class CondDDPM(nn.Module):
-    """条件潜扩散（v-prediction + FiLM 条件注入 + min-SNR 加权 + CFG 支持）。"""
+    """Conditional latent diffusion (v-prediction + FiLM conditioning + min-SNR weighting + CFG)."""
     def __init__(self, latent=64, cond_dim=258, hidden=512, T=400, cfg_drop=0.1):
         super().__init__()
         self.T = T; self.latent = latent; self.cfg_drop = cfg_drop
@@ -166,14 +166,14 @@ class CondDDPM(nn.Module):
             cc = cc * (~drop).float().unsqueeze(-1)
         c = self.cond_mlp(cc)
         pred = self._net_out(xt, c, te)
-        # min-SNR 加权（clamp 5）：放大低噪声步，逼模型真正使用条件
+        # min-SNR weighting (clamp 5): up-weights low-noise steps so the model uses the condition
         snr = (self.sqrt_ab ** 2) / (self.sqrt_1m_ab ** 2 + 1e-8)
         w = torch.clamp(snr, max=5.0)
         loss = (w[t] * (pred - v).pow(2).mean(dim=-1)).mean()
         return loss, noise
     @torch.no_grad()
     def sample(self, cond, steps=50, n=1, cfg=0.0):
-        """v-prediction DDIM 采样；cfg>0 时使用 classifier-free guidance。"""
+        """v-prediction DDIM sampling; cfg>0 enables classifier-free guidance."""
         self.eval()
         x = torch.randn(n, self.latent, device=cond.device)
         if cond.size(0) == 1:
@@ -200,7 +200,7 @@ class CondDDPM(nn.Module):
         return x
 
 # ============================================================
-# 条件编码：分子嵌入 + dose + time
+# Conditioning: molecule embedding + dose + time
 # ============================================================
 def build_cond(drug_emb, dose, time_h, device):
     d = torch.zeros((drug_emb.size(0), 1), device=device)
@@ -211,13 +211,13 @@ def build_cond(drug_emb, dose, time_h, device):
     return torch.cat([drug_emb, d, t], dim=-1)
 
 # ============================================================
-# LINCS 数据：GCTX -> memmap（978 标志基因）
+# LINCS data: GCTX -> memmap (978 landmark genes)
 # ============================================================
 def parse_col_id(cid):
-    """支持两种 LINCS 列ID：
-       4段: prefix:pert_id:dose:time   (如 ABY001_A375_XH:BRD-A61304759:0.625:24)
-       3段: prefix:pert:dose           (如 TSAI002_NPC-8_XH:SAHA:2.5, 时间默认24h)
-       2段及以下: 无药物信息，返回 None
+    """Supports two LINCS column-ID formats:
+       4-part: prefix:pert_id:dose:time   (e.g. ABY001_A375_XH:BRD-A61304759:0.625:24)
+       3-part: prefix:pert:dose           (e.g. TSAI002_NPC-8_XH:SAHA:2.5, time defaults to 24h)
+       2 parts or fewer: no drug info, returns None
     """
     parts = cid.split(":")
     if len(parts) < 3: return None
@@ -234,7 +234,7 @@ def parse_col_id(cid):
     return cell, pert, dose, t
 
 def prepare_lincs_memmap(gctx_path, geneinfo_path, out_dir, max_rows=None, log=print):
-    """把 GCTX 的有效药物样本（3/4段列ID）的 landmark 978 基因抽成 float16 memmap。返回 dict。"""
+    """Extract landmark-978 genes of valid drug samples (3/4-part column IDs) from GCTX into a float16 memmap. Returns a dict."""
     out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
     mm_path = out_dir / "lincs_lm.memmap"
     meta_path = out_dir / "lincs_meta.json"
@@ -242,10 +242,10 @@ def prepare_lincs_memmap(gctx_path, geneinfo_path, out_dir, max_rows=None, log=p
         gr = list(csv.DictReader(f, delimiter="\t"))
     lm_idx = [i for i, r in enumerate(gr) if r.get("feature_space") == "landmark"]
     lm_sym = [gr[i]["gene_symbol"] for i in lm_idx]
-    log(f"[数据] landmark 基因: {len(lm_idx)}")
+    log(f"[DATA] landmark genes: {len(lm_idx)}")
     with h5py.File(str(gctx_path), "r") as f:
         ids = [x.decode() if isinstance(x, bytes) else str(x) for x in f["0/META/COL/id"][...]]
-    # 只保留能解析出药物的样本（3段/4段）
+    # keep only samples whose column ID parses to a drug (3-part / 4-part)
     valid = []
     for ci, cid in enumerate(ids):
         pp = parse_col_id(cid)
@@ -257,24 +257,24 @@ def prepare_lincs_memmap(gctx_path, geneinfo_path, out_dir, max_rows=None, log=p
     if mm_path.exists() and meta_path.exists():
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         if meta["n"] == n_rows:
-            log(f"[数据] 复用已有预处理: {mm_path} ({meta['n']} 有效样本)")
+            log(f"[DATA] reusing existing preprocessing: {mm_path} ({meta['n']} valid samples)")
             return meta
-        log(f"[数据] 样本数不符(已有{meta['n']}, 需要{n_rows})，重新预处理")
+        log(f"[DATA] sample count mismatch (have {meta['n']}, need {n_rows}); re-preprocessing")
         mm_path.unlink(missing_ok=True); meta_path.unlink(missing_ok=True)
-    log(f"[数据] 有效药物样本 {n_rows}/{len(ids)}")
-    valid_rows = [v[0] for v in valid]  # 递增的原始行号
+    log(f"[DATA] valid drug samples {n_rows}/{len(ids)}")
+    valid_rows = [v[0] for v in valid]  # monotonically increasing original row numbers
     with h5py.File(str(gctx_path), "r") as f:
         mm = np.memmap(str(mm_path), dtype="float16", mode="w+", shape=(n_rows, len(lm_idx)))
         step = 20000
         for s in range(0, n_rows, step):
             e = min(s + step, n_rows)
             r0 = valid_rows[s]; r1 = valid_rows[e - 1] + 1
-            # h5py: slice + 单列列表 允许；fancy行 需要 numpy 二次筛选
+            # h5py: slice + single-column list is allowed; fancy row indexing needs a numpy second pass
             block = f["0/DATA/0/matrix"][r0:r1, lm_idx].astype(np.float16)
             rel = np.array([r - r0 for r in valid_rows[s:e]])
             mm[s:e] = block[rel]
             mm.flush()
-            log(f"[数据] 预处理进度: {e}/{n_rows}")
+            log(f"[DATA] preprocessing progress: {e}/{n_rows}")
         del mm
     cells = [v[1][0] for v in valid]
     perts = [v[1][1] for v in valid]
@@ -283,11 +283,11 @@ def prepare_lincs_memmap(gctx_path, geneinfo_path, out_dir, max_rows=None, log=p
     meta = {"n": n_rows, "memmap": str(mm_path), "genes": lm_sym,
             "cells": cells, "perts": perts, "doses": doses, "times": times}
     meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
-    log(f"[数据] 预处理完成: {n_rows} 有效样本 x {len(lm_idx)} 基因")
+    log(f"[DATA] preprocessing done: {n_rows} valid samples x {len(lm_idx)} genes")
     return meta
 
 class LincsBatch:
-    """从 memmap 随机取样本。"""
+    """Sample randomly from the memmap."""
     def __init__(self, meta, rng=None):
         self.meta = meta
         self.mm = np.memmap(meta["memmap"], dtype="float16", mode="r",
@@ -301,16 +301,16 @@ class LincsBatch:
         return x, [self.perts[i] for i in idx], [self.doses[i] for i in idx], [self.times[i] for i in idx]
 
 # ============================================================
-# 训练
+# Training
 # ============================================================
 def train_vae(data, device, epochs=20, batch_size=256, lr=1e-3, out_name="vae.pt",
               n_smoke=None, log=print, n_lm=978):
     model = VAE(n_lm=n_lm).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
     total = data.n if n_smoke is None else min(n_smoke, data.n)
-    log(f"[VAE] 训练 {epochs} epoch, 每 epoch {total} 样本, device={device}")
+    log(f"[VAE] training {epochs} epochs, {total} samples per epoch, device={device}")
     for ep in range(epochs):
-        beta = 0.0  # 纯 AE：潜变量自由承载信息，DDPM 负责学 z 分布
+        beta = 0.0  # pure AE: the latent is free to carry information; DDPM learns the z distribution
         model.train(); tot = 0.0; nb = 0; kl_sum = 0.0
         for s in range(0, total, batch_size):
             n = min(batch_size, total - s)
@@ -323,9 +323,9 @@ def train_vae(data, device, epochs=20, batch_size=256, lr=1e-3, out_name="vae.pt
             with torch.no_grad():
                 mu, lv = model.encode(x)
                 zstd = mu.std().item()
-            log(f"[VAE] epoch {ep+1}/{epochs} 重建MSE={tot/nb:.5f} KL={kl_sum/nb:.3f} zstd={zstd:.3f}")
+            log(f"[VAE] epoch {ep+1}/{epochs} recon-MSE={tot/nb:.5f} KL={kl_sum/nb:.3f} zstd={zstd:.3f}")
     torch.save({"model": model.state_dict(), "latent": model.latent}, str(OUT / out_name))
-    log(f"[VAE] 已保存 {out_name}")
+    log(f"[VAE] saved {out_name}")
     return model
 
 def train_ddpm(data, mol_enc, device, epochs=30, batch_size=256, lr=2e-4, T=400,
@@ -334,8 +334,8 @@ def train_ddpm(data, mol_enc, device, epochs=30, batch_size=256, lr=2e-4, T=400,
                labels=None, pw_weight=None, core_osteo_idx=None, bone_up=None,
                bone_lambda=0.15, geo_lambda=0.1, bone_every=8, bone_steps_t=200,
                init_ckpt=None, anchors=None, anchor_margin=0.2):
-    # anchors: list of (vec_978, sign, weight) —— 多 GEO 锚点方向监督（hinge）
-    # 骨监督：标记药物子集（必须有真实效应数据）
+    # anchors: list of (vec_978, sign, weight) - multi-GEO anchor directional supervision (hinge)
+    # bone supervision: labeled drug subset (requires real effect data)
     label_perts = []; label_eff = None; label_ys = None; bone_rng = None
     if labels:
         eff_map = dict(zip(data.perts, data.eff))
@@ -344,7 +344,7 @@ def train_ddpm(data, mol_enc, device, epochs=30, batch_size=256, lr=2e-4, T=400,
             label_perts = [p for p, _ in lps]
             label_ys = np.array([y for _, y in lps], dtype=np.int64)
             label_eff = np.stack([eff_map[p] for p in label_perts]).astype(np.float32)
-            log(f"[DDPM] 骨监督: 标记药物 {len(label_perts)} "
+            log(f"[DDPM] bone supervision: {len(label_perts)} labeled drugs "
                 f"(P={int((label_ys==0).sum())} I={int((label_ys==1).sum())} N={int((label_ys==2).sum())})")
             bone_rng = np.random.default_rng(7)
     cond_dim = 258
@@ -355,7 +355,7 @@ def train_ddpm(data, mol_enc, device, epochs=30, batch_size=256, lr=2e-4, T=400,
         ck_init = torch.load(str(init_ckpt), map_location=device, weights_only=False)
         model.load_state_dict(ck_init["model"])
         init_stats = (ck_init.get("z_mean"), ck_init.get("z_std"))
-        log(f"[DDPM] 从 {Path(init_ckpt).name} 继续训练")
+        log(f"[DDPM] resuming from {Path(init_ckpt).name}")
     mol_enc = mol_enc.to(device)
     if vae is not None:
         vae.eval()
@@ -369,29 +369,29 @@ def train_ddpm(data, mol_enc, device, epochs=30, batch_size=256, lr=2e-4, T=400,
         aux_head = nn.Sequential(nn.Linear(256, 128), nn.ReLU(), nn.Linear(128, 64)).to(device)
         enc_opt = torch.optim.AdamW(list(mol_enc.parameters()) + list(aux_head.parameters()),
                                     lr=lr * 0.5, weight_decay=1e-5)
-    # 分子嵌入用全局缓存（build_emb_cache 预计算过则秒查）
+    # molecule embeddings cached globally (precomputed by build_emb_cache)
     global _EMB_CACHE, _GRAPH_CACHE
-    # 自动补缓存：扫描数据中出现过的药物
+    # auto-fill cache: scan drugs present in the data
     if smiles_map is not None:
         if not mol_enc_frozen:
             todo = [pt for pt in data.perts if pt not in _GRAPH_CACHE and smiles_map.get(pt)]
-            log(f"[DDPM] 端到端模式：构建分子图缓存 {len(todo)}")
+            log(f"[DDPM] end-to-end mode: building molecule graph cache for {len(todo)}")
             for k, pt in enumerate(todo):
                 g = mol_to_graph(smiles_map[pt])
                 if g is not None: _GRAPH_CACHE[pt] = g
-                if (k + 1) % 4000 == 0: log(f"[DDPM] 图缓存 {k+1}/{len(todo)}")
-            log(f"[DDPM] 图缓存完成 {len(_GRAPH_CACHE)}")
+                if (k + 1) % 4000 == 0: log(f"[DDPM] graph cache {k+1}/{len(todo)}")
+            log(f"[DDPM] graph cache complete: {len(_GRAPH_CACHE)}")
         else:
             scan_perts = set()
             for pt in data.perts:
                 if pt not in _EMB_CACHE and smiles_map.get(pt):
                     scan_perts.add(pt)
             if scan_perts:
-                log(f"[DDPM] 扫描到 {len(scan_perts)} 个样本药物，补充嵌入缓存")
+                log(f"[DDPM] found {len(scan_perts)} sample drugs to add to the embedding cache")
                 build_emb_cache(mol_enc, smiles_map, list(scan_perts)[:20000], device, log=log, batch=128)
     total = data.n if n_smoke is None else min(n_smoke, data.n)
-    log(f"[DDPM] 训练 {epochs} epoch, T={T}, 数据点={total}, device={device}")
-    # 预扫描：计算潜变量 z 的均值/标准差（DDPM 在标准化 z 上训练）
+    log(f"[DDPM] training {epochs} epochs, T={T}, data points={total}, device={device}")
+    # prescan: compute latent z mean/std (DDPM trains on standardized z)
     if vae is not None:
         zs = []
         vae.eval()
@@ -405,9 +405,9 @@ def train_ddpm(data, mol_enc, device, epochs=30, batch_size=256, lr=2e-4, T=400,
         if init_stats is not None and init_stats[0] is not None:
             z_mean = np.array(init_stats[0], dtype=np.float64)
             z_std = np.array(init_stats[1], dtype=np.float64)
-            log("[DDPM] z 统计沿用 init_ckpt")
+            log("[DDPM] reusing z statistics from init_ckpt")
         else:
-            log(f"[DDPM] z 统计: mean={z_mean.mean():.3f} std={z_std.mean():.3f}")
+            log(f"[DDPM] z stats: mean={z_mean.mean():.3f} std={z_std.mean():.3f}")
     else:
         z_mean = np.zeros(64); z_std = np.ones(64)
     for ep in range(epochs):
@@ -416,7 +416,7 @@ def train_ddpm(data, mol_enc, device, epochs=30, batch_size=256, lr=2e-4, T=400,
             n = min(batch_size, total - s)
             x, perts, doses, times = data.sample(n)
             if not mol_enc_frozen:
-                # 端到端：按图缓存筛选药物
+                # end-to-end: filter drugs by graph cache
                 idx = [i for i in range(n) if _GRAPH_CACHE.get(perts[i]) is not None]
                 if len(idx) < max(1, n // 4):
                     miss += 1; continue
@@ -439,7 +439,7 @@ def train_ddpm(data, mol_enc, device, epochs=30, batch_size=256, lr=2e-4, T=400,
                     enc_opt.step()
                 tot += loss.item(); nb += 1
                 continue
-            # 骨监督 batch：每隔 bone_every 个 batch 用标记药物
+            # bone-supervision batch: every bone_every batches, use labeled drugs
             is_bone = (label_eff is not None) and (nb % bone_every == bone_every // 2)
             if is_bone:
                 bi = bone_rng.integers(0, len(label_perts), size=n)
@@ -461,7 +461,7 @@ def train_ddpm(data, mol_enc, device, epochs=30, batch_size=256, lr=2e-4, T=400,
                         mu = x
                 t = torch.randint(0, T, (len(idx),), device=device)
                 loss, _ = model(mu, cond, t)
-                # 骨方向损失：低噪声步估计 x0 -> 解码 -> 骨通路分数 / GEO 锚点余弦
+                # bone-direction loss: low-noise-step x0 estimate -> decode -> bone pathway scores / GEO anchor cosine
                 tb = torch.randint(0, min(bone_steps_t, T), (len(idx),), device=device)
                 noise = torch.randn_like(mu)
                 aa = model.sqrt_ab[tb]; bb = model.sqrt_1m_ab[tb]
@@ -497,7 +497,7 @@ def train_ddpm(data, mol_enc, device, epochs=30, batch_size=256, lr=2e-4, T=400,
                 opt.zero_grad(); loss.backward(); opt.step()
                 tot += loss.item(); nb += 1
                 continue
-            # 只用能解析到 SMILES 的样本
+            # keep only samples whose drug resolves to a SMILES
             idx = [i for i in range(n) if _EMB_CACHE.get(perts[i]) is not None]
             if len(idx) < max(1, n // 4):
                 miss += 1; continue
@@ -515,15 +515,15 @@ def train_ddpm(data, mol_enc, device, epochs=30, batch_size=256, lr=2e-4, T=400,
             loss, _ = model(mu, cond, t)
             opt.zero_grad(); loss.backward(); opt.step()
             tot += loss.item(); nb += 1
-        if nb: log(f"[DDPM] epoch {ep+1}/{epochs} 噪声MSE={tot/nb:.5f} (跳过样本组={miss})")
+        if nb: log(f"[DDPM] epoch {ep+1}/{epochs} noise-MSE={tot/nb:.5f} (skipped sample groups={miss})")
     torch.save({"model": model.state_dict(), "T": T, "hidden": hidden,
                 "z_mean": z_mean, "z_std": z_std}, str(OUT / out_name))
     model.z_mean = z_mean; model.z_std = z_std
-    log(f"[DDPM] 已保存 {out_name}")
+    log(f"[DDPM] saved {out_name}")
     return model
 
 class EffectsBatch:
-    """药物效应级数据：每行一个药物的平均 978 效应向量（信噪比远高于单样本）。"""
+    """Drug-effect-level data: one average 978-effect vector per drug (much higher SNR than single profiles)."""
     def __init__(self, perts, eff, rng=None):
         self.perts = list(perts); self.eff = eff
         self.rng = rng or np.random.default_rng(0)
@@ -534,7 +534,7 @@ class EffectsBatch:
         return x, [self.perts[i] for i in idx], [1.0] * n, [24.0] * n
 
 def build_drug_effects(meta, min_samples=3, log=print):
-    """按药物分组计算平均效应向量。返回 (perts, eff矩阵, 样本数dict)。"""
+    """Group profiles by drug and average effect vectors. Returns (perts, eff matrix, sample-count dict)."""
     mm = np.memmap(meta["memmap"], dtype="float16", mode="r",
                    shape=(meta["n"], len(meta["genes"])))
     sums = {}; cnts = {}
@@ -545,11 +545,11 @@ def build_drug_effects(meta, min_samples=3, log=print):
         sums[p] += mm[i].astype(np.float32); cnts[p] += 1
     keep = [p for p in sums if cnts[p] >= min_samples]
     eff = np.stack([sums[p] / cnts[p] for p in keep]).astype(np.float32)
-    log(f"[效应] 药物数(>= {min_samples} 样本): {len(keep)}/{len(sums)}")
+    log(f"[EFFECT] drugs (>= {min_samples} samples): {len(keep)}/{len(sums)}")
     return keep, eff, {p: cnts[p] for p in keep}
 
 def pert_smiles(pert, compound_map=None):
-    """pert_id -> SMILES（由 run_pipeline 注入全局表）"""
+    """pert_id -> SMILES (injected globally by run_pipeline)."""
     global _SMILES_MAP
     if compound_map is not None:
         return compound_map.get(pert)
@@ -558,13 +558,13 @@ def pert_smiles(pert, compound_map=None):
 _SMILES_MAP = {}
 
 _EMB_CACHE = {}
-_GRAPH_CACHE = {}   # pert_id -> 分子嵌入 (256d)，跨阶段复用
+_GRAPH_CACHE = {}   # pert_id -> molecule embedding (256-d), reused across stages
 
 def build_emb_cache(mol_enc, smiles_map, pert_ids, device="cuda", log=print, batch=256):
-    """预计算一批 pert 的分子嵌入并存入全局缓存。返回缓存数。"""
+    """Precompute molecule embeddings for a batch of perts and store in the global cache. Returns the cache size."""
     global _EMB_CACHE
     todo = [p for p in pert_ids if p not in _EMB_CACHE and smiles_map.get(p)]
-    log(f"[嵌入] 待计算 {len(todo)} 个药物的分子嵌入")
+    log(f"[EMB] computing embeddings for {len(todo)} drugs")
     mol_enc = mol_enc.to(device).eval()
     from torch_geometric.data import Batch
     with torch.no_grad():
@@ -581,12 +581,12 @@ def build_emb_cache(mol_enc, smiles_map, pert_ids, device="cuda", log=print, bat
             for pt, e in zip(ok_ids, emb):
                 _EMB_CACHE[pt] = e.detach().cpu()
             if (s // batch + 1) % 200 == 0:
-                log(f"[嵌入] {min(s+batch, len(todo))}/{len(todo)}")
-    log(f"[嵌入] 完成，缓存 {len(_EMB_CACHE)} 个药物")
+                log(f"[EMB] {min(s+batch, len(todo))}/{len(todo)}")
+    log(f"[EMB] done, cache holds {len(_EMB_CACHE)} drugs")
     return len(_EMB_CACHE)
 
 # ============================================================
-# 药物预测：SMILES -> 978 logFC
+# Drug prediction: SMILES -> 978 logFC
 # ============================================================
 @torch.no_grad()
 def sample_drug(ddpm, vae, mol_enc, smiles, dose=1.0, time_h=24.0,
@@ -605,7 +605,7 @@ def sample_drug(ddpm, vae, mol_enc, smiles, dose=1.0, time_h=24.0,
     return gex.mean(0).cpu().numpy()
 
 # ============================================================
-# GSE28074 探底验证（骨基因方向一致率，与 v19 同口径）
+# GSE28074 validation (bone-gene direction agreement)
 # ============================================================
 BONE_KW = ["OSTEOBLAST","BONE","OSSIF","RUNX2","BMP","WNT","SMAD","BGLAP","SP7",
            "SPP1","COL1A","ALP","TGFB","CTNNB1","IBSP","DLX5","DMP1","SOST","FOS","ATF4"]
@@ -653,28 +653,28 @@ def load_gse28074(gz_path, geneinfo_path):
 
 def validate_gse28074(ddpm, vae, mol_enc, drug_smiles_p, gz_path, geneinfo_path,
                       device="cuda", n_samples=16, steps=20, log=print):
-    """对促成骨药物集预测骨基因方向，与真实 BMP6 诱导方向对比。返回 dict。"""
+    """Predict bone-gene directions for pro-osteogenic drugs and compare with real BMP6-induced directions. Returns a dict."""
     expr, groups, s2g = load_gse28074(gz_path, geneinfo_path)
     genes = load_landmark_genes(geneinfo_path)
     g2i = {g: i for i, g in enumerate(genes)}
     matched = [(g, g2i[g]) for g in genes if g.upper() in s2g and g in g2i]
     bone = [(g, gi) for g, gi in matched if any(kw in g.upper() for kw in BONE_KW)]
-    log(f"[GEO验证] 匹配基因 {len(matched)}, 其中骨基因 {len(bone)}")
+    log(f"[GEO] matched genes {len(matched)}, bone genes {len(bone)}")
     if len(bone) < 5:
-        log("[GEO验证] 骨基因太少，验证无效")
+        log("[GEO] too few bone genes; validation invalid")
         return {"error": "matched bone genes too few"}
-    # 模型平均方向
+    # model-averaged direction
     pred_sum = np.zeros(len(genes), dtype=np.float64); n_done = 0
     for name, smi in drug_smiles_p.items():
         g = sample_drug(ddpm, vae, mol_enc, smi, n_samples=n_samples, steps=steps, device=device)
         if g is None:
-            log(f"[GEO验证] {name} 无有效SMILES，跳过")
+            log(f"[GEO] {name} has no valid SMILES; skipping")
             continue
         pred_sum += g; n_done += 1
     if n_done == 0:
         return {"error": "no drug predicted"}
     pred = pred_sum / n_done
-    log(f"[GEO验证] 模型平均 {n_done} 个促成骨药")
+    log(f"[GEO] model-averaged over {n_done} pro-osteogenic drugs")
     res = {}
     for tp in ["8hr", "24hr", "96hr", "10d"]:
         gi = groups.get(tp) or []
@@ -690,7 +690,7 @@ def validate_gse28074(ddpm, vae, mol_enc, drug_smiles_p, gz_path, geneinfo_path,
         gv, pv = geo_vec[bm], pred_vec[bm]
         agree = np.mean(np.sign(gv) == np.sign(pv)) if len(gv) else 0.0
         res[tp] = round(float(agree), 4)
-        log(f"[GEO验证] {tp}: 方向一致率 = {agree:.2%} ({len(gv)} 个骨基因)")
+        log(f"[GEO] {tp}: direction agreement = {agree:.2%} ({len(gv)} bone genes)")
     res["mean"] = round(float(np.mean(list(res.values()))), 4) if res else 0.0
     return res
 
@@ -700,7 +700,7 @@ def load_landmark_genes(geneinfo_path):
     return [r["gene_symbol"] for r in gr if r.get("feature_space") == "landmark"]
 
 def load_smiles_map(compoundinfo_path):
-    """构建 SMILES 查找表：BRD编号键 + 药物名键（3段格式样本用名字匹配）。"""
+    """Build a SMILES lookup: BRD-ID keys + drug-name keys (3-part samples matched by name)."""
     with open(str(compoundinfo_path), encoding="utf-8") as f:
         rows = list(csv.DictReader(f, delimiter="\t"))
     m = {}

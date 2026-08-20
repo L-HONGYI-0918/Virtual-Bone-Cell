@@ -2,7 +2,7 @@
 
 PathBone-MF predicts a drug's effect on bone lineage cell fate **from the molecular structure (SMILES) alone**, without any wet-lab input. It outputs:
 
-- **P/I/N classification** — whether the drug is pro-osteogenic (P), anti-osteogenic (I), or neutral (N) with respect to bone formation;
+- **P/I/N classification** — whether the drug promotes bone formation (P), inhibits bone formation (I), or is unrelated to bone formation (N);
 - **Four lineage direction scores** — osteoblast, osteoclast, adipocyte, chondrocyte;
 - **Net bone direction** (osteoblast − osteoclast), a quantitative readout of bone formation–resorption coupling;
 - **Mechanistic output** — 3,253 pathway activation scores and 12,328 gene-level expression changes, providing a "compound → pathway → gene" interpretation chain.
@@ -21,7 +21,7 @@ pip install -r requirements.txt
 
 ## Model weights
 
-Place the model weights and the MoLFormer tokenizer/model under the `模型/` directory. The script locates them automatically. Required files:
+Place the model weights and the MoLFormer tokenizer/model under the `models/` directory. The script locates them automatically. Required files:
 
 - `pathbone_v2_mf_pni.joblib` — PNI classifier
 - `pathbone_v2_mf_pni_decision.json` — anti-osteogenic decision bias
@@ -29,11 +29,11 @@ Place the model weights and the MoLFormer tokenizer/model under the `模型/` di
 - `pathbone_v2_*.pt` / `*.npz` — VAE, DDPM, GNN, pathway bottleneck and gene-expansion weights
 - `MoLFormer-XL-both-10pct/` — the pre-trained MoLFormer model
 
-> **MoLFormer is not bundled in this repository** (it is a public IBM pre-trained model, ~179 MB single weight file, exceeding GitHub's file limit). Download it from HuggingFace into `模型/MoLFormer-XL-both-10pct/`:
+> **MoLFormer is not bundled in this repository** (it is a public IBM pre-trained model, ~179 MB single weight file, exceeding GitHub's file limit). Download it from HuggingFace into `models/MoLFormer-XL-both-10pct/`:
 >
 > ```bash
 > pip install -U huggingface_hub
-> huggingface-cli download ibm/MoLFormer-XL-both-10pct --local-dir 模型/MoLFormer-XL-both-10pct
+> huggingface-cli download ibm/MoLFormer-XL-both-10pct --local-dir models/MoLFormer-XL-both-10pct
 > ```
 >
 > Alternatively, the script also looks for it at `data/models/MoLFormer-XL-both-10pct`.
