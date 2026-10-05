@@ -97,3 +97,32 @@ See `LICENSE`.
 ## Citation
 
 If you use PathBone-MF, please cite: [citation to be added upon publication].
+
+## Reproducing the reported results
+
+Evaluation code is provided in `src/eval/`:
+
+| Script | Produces |
+|---|---|
+| `make_test_set_135.py` | the strict independent test set (135 perturbation samples, 131 unique drugs) |
+| `scaffold_split_135.py` | scaffold-aware split with same-scaffold exclusion |
+| `final_metrics_135_drug.py` | Table 1 (three-way accuracy, per-class recall, AUC) |
+| `run_bib_ablation_baseline.py` | Table 2 (feature ablation) and Table 3 (baselines), with 15-fold cross-validation and paired tests |
+| `train_axis_classifiers_mf.py` | Table S2 (four lineage classifiers) |
+| `cross_cellline_val.py` | Fig. 7 (cross-cell-line consistency) |
+
+Supporting data are in `data/`:
+
+| File | Content |
+|---|---|
+| `labels_expanded.json` | the label library: 407 compounds with ternary bone-effect labels (label 0: 129 / label 1: 149 / label 2: 129) |
+| `compound_bone_labels.csv` | per-perturbation label assignment (LINCS pert_id, cmap_name, label); rows with label -1 are unlabelled perturbations |
+| `label_qa_summary.json` | PubMed evidence for each labelled compound |
+| `multi_axis_labels_v1.csv` | lineage-axis labels (osteoblast, osteoclast, adipocyte, chondrocyte) |
+| `test_set_drugs_135.json` | the strict independent test set |
+
+The decision rule is documented in `models/pathbone_v2_mf_pni_decision.json`: an offset of +0.56 is added to the
+inhibits-class probability before the argmax, selected on training-drug grouped cross-validation only.
+
+The evaluation scripts expect the LINCS L1000 Level 5 data (GSE92742, GSE70138) and the weights in `models/`.
+Absolute paths at the top of each script may need to be adjusted to your local data layout.
